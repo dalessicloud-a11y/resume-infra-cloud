@@ -1,0 +1,15 @@
+# Resume PDF - don't commit personal files to a public repo
+*.pdf
+
+# AWS credentials - never commit these
+.env
+credentials
+.aws/
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+*.suo

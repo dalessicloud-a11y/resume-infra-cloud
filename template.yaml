@@ -1,0 +1,97 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Resume hosting - S3 + CloudFront'
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: caio-dalessi-resume
+    Description: S3 bucket name (must be globally unique)
+
+Resources:
+
+  # S3 Bucket - private, no public access
+  ResumeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # Bucket policy - allows CloudFront OAC to read objects
+  ResumeBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ResumeBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${ResumeBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${ResumeDistribution}'
+
+  # CloudFront Origin Access Control
+  ResumeOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: resume-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # CloudFront Distribution
+  ResumeDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Resume PDF distribution
+        DefaultRootObject: 'resume.pdf'
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt ResumeBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+            OriginAccessControlId: !GetAtt ResumeOAC.Id
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized managed policy
+          AllowedMethods:
+            - GET
+            - HEAD
+          ResponseHeadersPolicyId: !Ref ResumeResponseHeadersPolicy
+        PriceClass: PriceClass_100  # US, Canada, Europe (cheapest)
+        HttpVersion: http2
+
+  # Response headers - forces PDF to open inline in the browser
+  ResumeResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: resume-headers-policy
+        CustomHeadersConfig:
+          Items:
+            - Header: Content-Disposition
+              Value: inline
+              Override: true
+            - Header: Content-Type
+              Value: application/pdf
+              Override: true
+
+Outputs:
+  CloudFrontURL:
+    Description: 'Your resume is live at this URL'
+    Value: !Sub 'https://${ResumeDistribution.DomainName}'
+
+  BucketName:
+    Description: 'S3 bucket name'
+    Value: !Ref ResumeBucket
