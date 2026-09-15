@@ -58,7 +58,7 @@ aws configure
 
 ### 2. Clone this repository
 ```powershell
-git clone https://github.com/YOUR_USERNAME/resume-infra.git
+git clone https://github.com/dalessicloud-a11y/resume-infra.git
 cd resume-infra
 ```
 
