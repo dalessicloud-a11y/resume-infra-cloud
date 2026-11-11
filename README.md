@@ -1,8 +1,8 @@
 # ☁️ Resume Hosting on AWS — S3 + CloudFront
 
-My first AWS cloud infrastructure project. A simple, serverless, and cost-effective way to host a PDF resume publicly on the internet using AWS managed services and Infrastructure as Code (IaC).
+My first AWS cloud infrastructure project. A simple, serverless, and cost-effective way to host a resume landing page + PDF on the internet using AWS managed services and Infrastructure as Code (IaC).
 
-**Live:** https://d2ei9h2gh8lzqc.cloudfront.net
+**Live:** https://d2x5cne2sxulxo.cloudfront.net
 
 ---
 
@@ -10,11 +10,13 @@ My first AWS cloud infrastructure project. A simple, serverless, and cost-effect
 
 ```
 Browser → CloudFront (HTTPS) → S3 (private bucket)
+              ├─ /           → index.html (landing)
+              └─ /resume.pdf → PDF embed / download
 ```
 
 | Layer | Service | Role |
 |---|---|---|
-| Storage | Amazon S3 | Stores the PDF privately |
+| Storage | Amazon S3 | Stores the HTML + PDF privately |
 | CDN | Amazon CloudFront | Delivers over HTTPS globally |
 | Security | Origin Access Control (OAC) | CloudFront-only access to S3 |
 | IaC | AWS CloudFormation | Reproducible infrastructure |
@@ -25,7 +27,7 @@ Browser → CloudFront (HTTPS) → S3 (private bucket)
 
 ## 🛠️ Stack
 
-- **AWS S3** — object storage for the PDF file
+- **AWS S3** — object storage for the landing page and PDF
 - **AWS CloudFront** — global CDN with HTTPS and custom response headers
 - **AWS CloudFormation** — infrastructure defined as code (YAML)
 - **AWS CLI** — deployment from the terminal
@@ -36,6 +38,7 @@ Browser → CloudFront (HTTPS) → S3 (private bucket)
 
 ```
 resume-infra-cloud/
+├── index.html       # Landing page (name, headline, embedded PDF)
 ├── template.yaml    # CloudFormation template (S3 + CloudFront)
 ├── deploy.ps1       # Deployment script (PowerShell)
 └── README.md        # This file
@@ -66,6 +69,8 @@ Place `resume.pdf` in the project folder, **or** pass the path when deploying:
 .\deploy.ps1 -ResumeFile "C:\path\to\your\resume.pdf"
 ```
 
+`index.html` is already in the repo and is uploaded automatically.
+
 ### 4. Run the deployment script
 ```powershell
 .\deploy.ps1
@@ -75,7 +80,7 @@ If you omit `-BucketName`, the script generates a unique name like `resume-<acco
 
 This will:
 1. Deploy the CloudFormation stack (S3 bucket + CloudFront distribution)
-2. Upload your PDF to S3
+2. Upload `index.html` and `resume.pdf` to S3
 3. Invalidate the CloudFront cache (when needed)
 4. Print the live CloudFront URL
 
@@ -83,7 +88,7 @@ This will:
 
 ---
 
-## 🔄 Updating the Resume
+## 🔄 Updating the Resume or Landing Page
 
 Easiest option — re-upload and invalidate cache via the script:
 
@@ -91,9 +96,10 @@ Easiest option — re-upload and invalidate cache via the script:
 .\deploy.ps1 -ForceUpload -ResumeFile "C:\path\to\your\resume.pdf"
 ```
 
-Or do it manually with AWS CLI (replace bucket and distribution id with your values from the deploy output):
+Or do it manually with AWS CLI (replace bucket and distribution id with your values):
 
 ```powershell
+aws s3 cp index.html s3://YOUR_BUCKET_NAME/index.html --content-type "text/html; charset=utf-8"
 aws s3 cp "path\to\your\resume.pdf" s3://YOUR_BUCKET_NAME/resume.pdf --content-type "application/pdf"
 aws cloudfront create-invalidation --distribution-id YOUR_DISTRIBUTION_ID --paths "/*"
 ```
@@ -117,7 +123,7 @@ This setup runs at effectively **$0/month** at personal traffic levels:
 - How to create and configure an **S3 bucket** with public access blocked
 - How **CloudFront OAC** (Origin Access Control) securely connects CloudFront to a private S3 bucket
 - How to write a **CloudFormation template** to define cloud infrastructure as code
-- How to set **response headers** in CloudFront to control browser behavior (inline PDF rendering)
+- How to host a static **landing page** that embeds a PDF behind CloudFront
 - How to deploy and manage a stack using the **AWS CLI**
 
 ---
@@ -125,7 +131,7 @@ This setup runs at effectively **$0/month** at personal traffic levels:
 ## 🗺️ Next Steps
 
 - [ ] Add a custom domain with **Route 53** and **ACM** (SSL certificate)
-- [ ] Build an HTML landing page to wrap the resume
+- [x] Build an HTML landing page to wrap the resume
 - [ ] Add a CI/CD pipeline with **GitHub Actions** to auto-deploy on push
 - [ ] Explore **AWS CDK** as an alternative to CloudFormation YAML
 
