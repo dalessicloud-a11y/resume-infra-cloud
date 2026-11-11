@@ -19,8 +19,6 @@ Browser → CloudFront (HTTPS) → S3 (private bucket)
 | Security | Origin Access Control (OAC) | CloudFront-only access to S3 |
 | IaC | AWS CloudFormation | Reproducible infrastructure |
 
-![Architecture Diagram](docs/architecture.png)
-
 > The S3 bucket has **no public access**. Only CloudFront can read from it via OAC, preventing direct bucket exposure.
 
 ---
@@ -37,7 +35,7 @@ Browser → CloudFront (HTTPS) → S3 (private bucket)
 ## 📁 Project Structure
 
 ```
-resume-infra/
+resume-infra-cloud/
 ├── template.yaml    # CloudFormation template (S3 + CloudFront)
 ├── deploy.ps1       # Deployment script (PowerShell)
 └── README.md        # This file
@@ -58,14 +56,14 @@ aws configure
 
 ### 2. Clone this repository
 ```powershell
-git clone https://github.com/dalessicloud-a11y/resume-infra.git
-cd resume-infra
+git clone https://github.com/dalessicloud-a11y/resume-infra-cloud.git
+cd resume-infra-cloud
 ```
 
 ### 3. Add your resume PDF
-Place your PDF in the project folder or update the path in `deploy.ps1`:
+Place `resume.pdf` in the project folder, **or** pass the path when deploying:
 ```powershell
-$ResumeFile = "C:\path\to\your\resume.pdf"
+.\deploy.ps1 -ResumeFile "C:\path\to\your\resume.pdf"
 ```
 
 ### 4. Run the deployment script
@@ -73,10 +71,13 @@ $ResumeFile = "C:\path\to\your\resume.pdf"
 .\deploy.ps1
 ```
 
+If you omit `-BucketName`, the script generates a unique name like `resume-<account-id>-us-east-1`.
+
 This will:
 1. Deploy the CloudFormation stack (S3 bucket + CloudFront distribution)
 2. Upload your PDF to S3
-3. Print the live CloudFront URL
+3. Invalidate the CloudFront cache (when needed)
+4. Print the live CloudFront URL
 
 > First deployment takes ~3 minutes. CloudFront propagation may add another 2-5 minutes.
 
@@ -84,14 +85,17 @@ This will:
 
 ## 🔄 Updating the Resume
 
-Re-upload the PDF and invalidate the CloudFront cache:
+Easiest option — re-upload and invalidate cache via the script:
 
 ```powershell
-# Upload new version
-aws s3 cp "path\to\your\resume.pdf" s3://caio-dalessi-resume/resume.pdf --content-type "application/pdf"
+.\deploy.ps1 -ForceUpload -ResumeFile "C:\path\to\your\resume.pdf"
+```
 
-# Invalidate cache so CloudFront serves the new file immediately
-aws cloudfront create-invalidation --distribution-id <DISTRIBUTION_ID> --paths "/*"
+Or do it manually with AWS CLI (replace bucket and distribution id with your values from the deploy output):
+
+```powershell
+aws s3 cp "path\to\your\resume.pdf" s3://YOUR_BUCKET_NAME/resume.pdf --content-type "application/pdf"
+aws cloudfront create-invalidation --distribution-id YOUR_DISTRIBUTION_ID --paths "/*"
 ```
 
 ---
