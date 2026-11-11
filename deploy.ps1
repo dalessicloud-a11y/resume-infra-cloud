@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Deploys resume infrastructure (S3 + CloudFront) and uploads PDF.
+    Deploys resume infrastructure (S3 + CloudFront) and uploads site files.
 
 .DESCRIPTION
-    Deploys CloudFormation stack from template.yaml, uploads resume.pdf to S3,
-    and invalidates CloudFront cache.
+    Deploys CloudFormation stack from template.yaml, uploads index.html + resume.pdf
+    to S3, and invalidates CloudFront cache.
 
 .PARAMETER StackName
     CloudFormation stack name (default: resume-stack)
@@ -18,14 +18,17 @@
 .PARAMETER ResumeFile
     Path to resume PDF file (default: ./resume.pdf)
 
+.PARAMETER IndexFile
+    Path to landing page HTML (default: ./index.html)
+
 .PARAMETER Region
     AWS region (default: us-east-1)
 
 .PARAMETER SkipUpload
-    Skip PDF upload and cache invalidation (stack only)
+    Skip file upload and cache invalidation (stack only)
 
 .PARAMETER ForceUpload
-    Upload PDF even if stack deployment had no changes
+    Upload files even if stack deployment had no changes
 
 .EXAMPLE
     .\deploy.ps1
@@ -55,6 +58,9 @@ param(
     [string]$ResumeFile = "resume.pdf",
 
     [Parameter()]
+    [string]$IndexFile = "index.html",
+
+    [Parameter()]
     [string]$Region = "us-east-1",
 
     [switch]$SkipUpload,
@@ -66,9 +72,9 @@ param(
 # Helpers
 # ────────────────────────────────────────────────────────────────
 function Write-Info  { Write-Host "==> $args" -ForegroundColor Cyan }
-function Write-Ok    { Write-Host "✔ $args"  -ForegroundColor Green }
-function Write-Warn  { Write-Host "⚠ $args"  -ForegroundColor Yellow }
-function Write-Error { Write-Host "✖ $args"  -ForegroundColor Red; exit 1 }
+function Write-Ok    { Write-Host "[OK] $args"  -ForegroundColor Green }
+function Write-Warn  { Write-Host "[!] $args"  -ForegroundColor Yellow }
+function Write-Error { Write-Host "[X] $args"  -ForegroundColor Red; exit 1 }
 
 function Test-Command {
     param([string]$Command, [string]$Name = $Command)
@@ -109,10 +115,13 @@ if (-not $BucketName) {
     Write-Warn "BucketName não informado. Gerado: $BucketName"
 }
 
-# PDF existe? (só valida se não for SkipUpload)
-$uploadPdf = -not $SkipUpload
-if ($uploadPdf -and -not (Test-Path $ResumeFile)) {
-    Write-Error "PDF não encontrado: $ResumeFile `nUse -ResumeFile <path> ou coloque resume.pdf na raiz do repo."
+# Arquivos do site existem? (só valida se não for SkipUpload)
+$uploadFiles = -not $SkipUpload
+if ($uploadFiles -and -not (Test-Path $ResumeFile)) {
+    Write-Error "PDF nao encontrado: $ResumeFile `nUse -ResumeFile 'C:\path\to\file.pdf' ou coloque resume.pdf na raiz do repo."
+}
+if ($uploadFiles -and -not (Test-Path $IndexFile)) {
+    Write-Error "Landing page nao encontrada: $IndexFile `nUse -IndexFile '.\index.html' ou coloque index.html na raiz do repo."
 }
 
 # ────────────────────────────────────────────────────────────────
@@ -141,9 +150,19 @@ Write-Ok "Stack deployed (ou sem alterações)"
 $stackChanged = $deployResult -notmatch "No changes to deploy"
 
 # ────────────────────────────────────────────────────────────────
-# Upload PDF + Invalidate Cache
+# Upload site files + Invalidate Cache
 # ────────────────────────────────────────────────────────────────
-if ($uploadPdf -and ($stackChanged -or $ForceUpload)) {
+if ($uploadFiles -and ($stackChanged -or $ForceUpload)) {
+    Write-Info "Uploading landing page to s3://$BucketName/index.html"
+    $htmlResult = aws s3 cp $IndexFile "s3://$BucketName/index.html" `
+        --content-type "text/html; charset=utf-8" `
+        --cache-control "max-age=300,public" `
+        --region $Region 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "HTML upload failed:`n$htmlResult"
+    }
+    Write-Ok "Landing page uploaded"
+
     Write-Info "Uploading resume PDF to s3://$BucketName/resume.pdf"
     $uploadResult = aws s3 cp $ResumeFile "s3://$BucketName/resume.pdf" `
         --content-type "application/pdf" `
@@ -154,28 +173,32 @@ if ($uploadPdf -and ($stackChanged -or $ForceUpload)) {
     }
     Write-Ok "PDF uploaded"
 
-    # Invalida CloudFront
+    # Invalida CloudFront (ID fisico da distribution, nao o hostname)
     Write-Info "Invalidating CloudFront cache..."
-    $distId = aws cloudformation describe-stacks `
+    $distId = aws cloudformation describe-stack-resources `
         --stack-name $StackName `
         --region $Region `
-        --query "Stacks[0].Outputs[?OutputKey=='CloudFrontURL'].OutputValue" `
+        --query "StackResources[?LogicalResourceId=='ResumeDistribution'].PhysicalResourceId" `
         --output text 2>$null
-    if ($distId -match 'https://([^.]+)\.cloudfront\.net') {
-        $distId = $matches[1]
+    if ($distId -match '^E[A-Z0-9]+$') {
         aws cloudfront create-invalidation `
             --distribution-id $distId `
             --paths "/*" `
             --region $Region | Out-Null
-        Write-Ok "Cache invalidation created (ativa em ~1-2 min)"
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "Cache invalidation created (ativa em ~1-2 min)"
+        }
+        else {
+            Write-Warn "Falha ao criar invalidacao do CloudFront"
+        }
     }
     else {
-        Write-Warn "Não foi possível obter Distribution ID para invalidação"
+        Write-Warn "Nao foi possivel obter Distribution ID para invalidacao"
     }
 }
-elseif ($uploadPdf) {
+elseif ($uploadFiles) {
     Write-Info "Stack sem mudanças e -ForceUpload não usado. Pulando upload/invalidação."
-    Write-Info "Use -ForceUpload para forçar re-upload do PDF."
+    Write-Info "Use -ForceUpload para forçar re-upload dos arquivos."
 }
 
 # ────────────────────────────────────────────────────────────────

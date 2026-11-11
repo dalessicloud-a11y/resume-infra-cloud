@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Caio Dalessi — Resume</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --text: #1a2332;
+      --muted: #5a6a7a;
+      --accent: #2f5d8a;
+      --accent-hover: #244a6e;
+      --border: #d8dee6;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      font-family: "IBM Plex Sans", sans-serif;
+      background:
+        radial-gradient(ellipse 80% 50% at 50% -10%, #e4eef7 0%, transparent 55%),
+        var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      max-width: 960px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 2.5rem 1.5rem 1.5rem;
+      text-align: center;
+    }
+
+    h1 {
+      font-family: "IBM Plex Serif", serif;
+      font-weight: 600;
+      font-size: clamp(1.75rem, 4vw, 2.35rem);
+      letter-spacing: -0.02em;
+      margin-bottom: 0.5rem;
+    }
+
+    .headline {
+      color: var(--muted);
+      font-size: 1.05rem;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      margin-bottom: 1.5rem;
+    }
+
+    .cta {
+      display: inline-block;
+      padding: 0.7rem 1.35rem;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      font-weight: 500;
+      font-size: 0.95rem;
+      border-radius: 6px;
+      transition: background 0.15s ease;
+    }
+
+    .cta:hover {
+      background: var(--accent-hover);
+    }
+
+    .cta:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+    }
+
+    main {
+      flex: 1;
+      max-width: 960px;
+      width: 100%;
+      margin: 0 auto 2rem;
+      padding: 0 1.5rem;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .pdf-frame {
+      flex: 1;
+      min-height: 70vh;
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: 0 1px 2px rgba(26, 35, 50, 0.04);
+    }
+
+    .fallback {
+      display: none;
+      margin-top: 0.75rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    @media (max-width: 640px) {
+      .pdf-frame {
+        min-height: 55vh;
+      }
+
+      .fallback {
+        display: block;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Caio Dalessi</h1>
+    <p class="headline">Cloud / programming / AI</p>
+    <a class="cta" href="resume.pdf" target="_blank" rel="noopener">Open PDF</a>
+  </header>
+
+  <main>
+    <iframe
+      class="pdf-frame"
+      src="resume.pdf"
+      title="Caio Dalessi resume PDF"
+    ></iframe>
+    <p class="fallback">
+      PDF preview works best on desktop.
+      Use <a href="resume.pdf" target="_blank" rel="noopener">Open PDF</a> on mobile.
+    </p>
+  </main>
+</body>
+</html>

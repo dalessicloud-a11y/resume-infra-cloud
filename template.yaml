@@ -54,7 +54,7 @@ Resources:
       DistributionConfig:
         Enabled: true
         Comment: Resume PDF distribution
-        DefaultRootObject: 'resume.pdf'
+        DefaultRootObject: 'index.html'
         Origins:
           - Id: S3Origin
             DomainName: !GetAtt ResumeBucket.RegionalDomainName
@@ -72,7 +72,8 @@ Resources:
         PriceClass: PriceClass_100  # US, Canada, Europe (cheapest)
         HttpVersion: http2
 
-  # Response headers - forces PDF to open inline in the browser
+  # Response headers - prefer inline display (PDF opens in browser, not as forced download)
+  # Content-Type comes from S3 object metadata so HTML and PDF both work
   ResumeResponseHeadersPolicy:
     Type: AWS::CloudFront::ResponseHeadersPolicy
     Properties:
@@ -82,9 +83,6 @@ Resources:
           Items:
             - Header: Content-Disposition
               Value: inline
-              Override: true
-            - Header: Content-Type
-              Value: application/pdf
               Override: true
 
 Outputs:
