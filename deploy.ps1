@@ -1,31 +1,43 @@
-<#
+﻿<#
 .SYNOPSIS
-    Deploys resume infrastructure (S3 + CloudFront) and uploads PDF.
+    Deploys resume infrastructure (S3 + CloudFront) and uploads the PDF.
 
 .DESCRIPTION
-    Deploys CloudFormation stack from template.yaml, uploads resume.pdf to S3,
-    and invalidates CloudFront cache.
+    Deploys the CloudFormation stack from template.yaml, uploads resume.pdf to S3
+    on every run (unless -SkipUpload), and invalidates the CloudFront cache.
+    Bucket name, distribution ID, and URL are read from stack outputs after deploy.
+
+    The PDF is uploaded with Cache-Control max-age=300. CloudFront invalidation
+    drops the CDN copy immediately; browsers may keep a copy for up to 5 minutes.
 
 .PARAMETER StackName
     CloudFormation stack name (default: resume-stack)
 
 .PARAMETER TemplateFile
-    Path to CloudFormation template (default: ./template.yaml)
+    Path to the CloudFormation template (default: ./template.yaml)
 
 .PARAMETER BucketName
-    S3 bucket name (default: auto-generated unique name)
+    S3 bucket name. When omitted, a new stack uses the template default
+    (caio-dalessi-resume) and an existing stack keeps its current bucket.
 
 .PARAMETER ResumeFile
-    Path to resume PDF file (default: ./resume.pdf)
+    Path to the resume PDF (default: ./resume.pdf)
 
 .PARAMETER Region
-    AWS region (default: us-east-1)
+    AWS region for the stack and the bucket (default: us-east-1).
+    CloudFront invalidation always uses us-east-1, where that API lives.
+
+.PARAMETER PriceClass
+    Optional CloudFront price class override (PriceClass_100, PriceClass_200, PriceClass_All).
+
+.PARAMETER Environment
+    Optional Environment tag override.
 
 .PARAMETER SkipUpload
-    Skip PDF upload and cache invalidation (stack only)
+    Deploy the stack only. Do not upload the PDF or invalidate CloudFront.
 
 .PARAMETER ForceUpload
-    Upload PDF even if stack deployment had no changes
+    Accepted for compatibility. The PDF is uploaded on every deploy anyway.
 
 .EXAMPLE
     .\deploy.ps1
@@ -57,135 +69,152 @@ param(
     [Parameter()]
     [string]$Region = "us-east-1",
 
+    [Parameter()]
+    [string]$PriceClass = "",
+
+    [Parameter()]
+    [string]$Environment = "",
+
     [switch]$SkipUpload,
 
     [switch]$ForceUpload
 )
 
-# ────────────────────────────────────────────────────────────────
-# Helpers
-# ────────────────────────────────────────────────────────────────
-function Write-Info  { Write-Host "==> $args" -ForegroundColor Cyan }
-function Write-Ok    { Write-Host "✔ $args"  -ForegroundColor Green }
-function Write-Warn  { Write-Host "⚠ $args"  -ForegroundColor Yellow }
-function Write-Error { Write-Host "✖ $args"  -ForegroundColor Red; exit 1 }
+$CacheControl = "max-age=300,public"
+$CloudFrontRegion = "us-east-1"
+$AllowedPriceClasses = @("PriceClass_100", "PriceClass_200", "PriceClass_All")
+
+function Write-Info {
+    param([string]$Message)
+    Write-Host "==> $Message" -ForegroundColor Cyan
+}
+
+function Write-Ok {
+    param([string]$Message)
+    Write-Host "OK $Message" -ForegroundColor Green
+}
+
+function Stop-Deploy {
+    param([string]$Message)
+    Write-Host "ERRO $Message" -ForegroundColor Red
+    exit 1
+}
 
 function Test-Command {
     param([string]$Command, [string]$Name = $Command)
     if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
-        Write-Error "$Name não encontrado no PATH. Instale: $Command"
+        Stop-Deploy "$Name não encontrado no PATH. Instale: $Command"
     }
 }
 
-function Get-UniqueBucketName {
-    $accountId = aws sts get-caller-identity --query Account --output text 2>$null
-    if (-not $accountId) { return "resume-$(Get-Random -Minimum 100000 -Maximum 999999)" }
-    "resume-$accountId-$Region".ToLower()
+function Get-StackOutput {
+    param([Parameter(Mandatory)][string]$Key)
+
+    $value = aws cloudformation describe-stacks `
+        --stack-name $StackName `
+        --region $Region `
+        --query "Stacks[0].Outputs[?OutputKey=='$Key'].OutputValue" `
+        --output text 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Stop-Deploy "Falha ao ler o output '$Key':`n$value"
+    }
+
+    $text = "$value".Trim()
+    if (-not $text -or $text -eq "None") {
+        Stop-Deploy "Output '$Key' não encontrado no stack '$StackName'. Confira se o template atualizado foi aplicado."
+    }
+    return $text
 }
 
-# ────────────────────────────────────────────────────────────────
-# Pre-flight checks
-# ────────────────────────────────────────────────────────────────
 Write-Info "Verificando pré-requisitos..."
 Test-Command "aws" "AWS CLI v2"
 
-# Verifica credenciais AWS
+if ($PriceClass -and $AllowedPriceClasses -notcontains $PriceClass) {
+    Stop-Deploy "PriceClass inválida: $PriceClass. Use: $($AllowedPriceClasses -join ', ')"
+}
+
 try {
     $identity = aws sts get-caller-identity --output json 2>$null | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or -not $identity.Arn) {
+        throw "identity unavailable"
+    }
     Write-Ok "AWS autenticado: $($identity.Arn)"
 }
 catch {
-    Write-Error "AWS CLI não configurado. Rode: aws configure"
+    Stop-Deploy "AWS CLI não configurado. Rode: aws configure"
 }
 
-# Template existe?
 if (-not (Test-Path $TemplateFile)) {
-    Write-Error "Template não encontrado: $TemplateFile"
+    Stop-Deploy "Template não encontrado: $TemplateFile"
 }
 
-# Bucket name
-if (-not $BucketName) {
-    $BucketName = Get-UniqueBucketName
-    Write-Warn "BucketName não informado. Gerado: $BucketName"
-}
-
-# PDF existe? (só valida se não for SkipUpload)
 $uploadPdf = -not $SkipUpload
 if ($uploadPdf -and -not (Test-Path $ResumeFile)) {
-    Write-Error "PDF não encontrado: $ResumeFile `nUse -ResumeFile <path> ou coloque resume.pdf na raiz do repo."
+    Stop-Deploy "PDF não encontrado: $ResumeFile`nUse -ResumeFile caminho ou coloque resume.pdf na raiz do repo."
 }
 
-# ────────────────────────────────────────────────────────────────
-# Deploy CloudFormation
-# ────────────────────────────────────────────────────────────────
+if ($ForceUpload) {
+    Write-Info "-ForceUpload não é mais necessário: o PDF é enviado em todo deploy (use -SkipUpload para não enviar)."
+}
+
+if (-not $BucketName) {
+    Write-Info "BucketName não informado. Stack novo usa o default do template (caio-dalessi-resume); stack existente mantém o bucket atual."
+}
+
 Write-Info "Deploying CloudFormation stack: $StackName"
 
 $deployArgs = @(
     "cloudformation", "deploy",
     "--stack-name", $StackName,
     "--template-file", $TemplateFile,
-    "--parameter-overrides", "BucketName=$BucketName",
     "--region", $Region,
     "--no-fail-on-empty-changeset"
 )
-# Template não cria IAM — remove CAPABILITY_IAM desnecessário
-# Se futuramente adicionar IAM, adicione: "--capabilities", "CAPABILITY_IAM"
+
+$overrides = @()
+if ($BucketName) { $overrides += "BucketName=$BucketName" }
+if ($PriceClass) { $overrides += "PriceClass=$PriceClass" }
+if ($Environment) { $overrides += "Environment=$Environment" }
+if ($overrides.Count -gt 0) {
+    $deployArgs += "--parameter-overrides"
+    $deployArgs += $overrides
+}
 
 $deployResult = aws @deployArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Stack deployment failed:`n$deployResult"
+    Stop-Deploy "Stack deployment failed:`n$deployResult"
 }
 Write-Ok "Stack deployed (ou sem alterações)"
 
-# Captura se houve mudança real no stack
-$stackChanged = $deployResult -notmatch "No changes to deploy"
+$resolvedBucket = Get-StackOutput -Key "BucketName"
+$distributionId = Get-StackOutput -Key "DistributionId"
+$url = Get-StackOutput -Key "CloudFrontURL"
 
-# ────────────────────────────────────────────────────────────────
-# Upload PDF + Invalidate Cache
-# ────────────────────────────────────────────────────────────────
-if ($uploadPdf -and ($stackChanged -or $ForceUpload)) {
-    Write-Info "Uploading resume PDF to s3://$BucketName/resume.pdf"
-    $uploadResult = aws s3 cp $ResumeFile "s3://$BucketName/resume.pdf" `
+if ($distributionId -notmatch '^E[A-Z0-9]+$') {
+    Stop-Deploy "DistributionId inválido: '$distributionId'. A invalidação precisa do ID do CloudFront (ex.: E1A2B3C4D5E6F7), não do domínio."
+}
+
+if ($uploadPdf) {
+    Write-Info "Uploading resume PDF to s3://$resolvedBucket/resume.pdf"
+    $uploadResult = aws s3 cp $ResumeFile "s3://$resolvedBucket/resume.pdf" `
         --content-type "application/pdf" `
-        --cache-control "max-age=31536000,public" `
+        --cache-control $CacheControl `
         --region $Region 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "PDF upload failed:`n$uploadResult"
+        Stop-Deploy "PDF upload failed:`n$uploadResult"
     }
     Write-Ok "PDF uploaded"
 
-    # Invalida CloudFront
-    Write-Info "Invalidating CloudFront cache..."
-    $distId = aws cloudformation describe-stacks `
-        --stack-name $StackName `
-        --region $Region `
-        --query "Stacks[0].Outputs[?OutputKey=='CloudFrontURL'].OutputValue" `
-        --output text 2>$null
-    if ($distId -match 'https://([^.]+)\.cloudfront\.net') {
-        $distId = $matches[1]
-        aws cloudfront create-invalidation `
-            --distribution-id $distId `
-            --paths "/*" `
-            --region $Region | Out-Null
-        Write-Ok "Cache invalidation created (ativa em ~1-2 min)"
+    Write-Info "Invalidating CloudFront cache ($distributionId)..."
+    $invalidation = aws cloudfront create-invalidation `
+        --distribution-id $distributionId `
+        --paths "/*" `
+        --region $CloudFrontRegion 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Stop-Deploy "CloudFront invalidation failed:`n$invalidation"
     }
-    else {
-        Write-Warn "Não foi possível obter Distribution ID para invalidação"
-    }
+    Write-Ok "Cache invalidation created (CDN imediato; o browser pode guardar o PDF por até 5 min)"
 }
-elseif ($uploadPdf) {
-    Write-Info "Stack sem mudanças e -ForceUpload não usado. Pulando upload/invalidação."
-    Write-Info "Use -ForceUpload para forçar re-upload do PDF."
-}
-
-# ────────────────────────────────────────────────────────────────
-# Output URL
-# ────────────────────────────────────────────────────────────────
-$url = aws cloudformation describe-stacks `
-    --stack-name $StackName `
-    --region $Region `
-    --query "Stacks[0].Outputs[?OutputKey=='CloudFrontURL'].OutputValue" `
-    --output text 2>$null
 
 Write-Host ""
 Write-Host "================================================" -ForegroundColor Green
@@ -193,6 +222,7 @@ Write-Host " Your resume is live!" -ForegroundColor Green
 Write-Host " $url" -ForegroundColor Yellow
 Write-Host "================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Bucket: $BucketName" -ForegroundColor Gray
-Write-Host "Stack:  $StackName" -ForegroundColor Gray
-Write-Host "Region: $Region" -ForegroundColor Gray
+Write-Host "Bucket:       $resolvedBucket" -ForegroundColor Gray
+Write-Host "Distribution: $distributionId" -ForegroundColor Gray
+Write-Host "Stack:        $StackName" -ForegroundColor Gray
+Write-Host "Region:       $Region" -ForegroundColor Gray

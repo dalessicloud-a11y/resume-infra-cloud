@@ -1,17 +1,42 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Resume hosting - S3 + CloudFront'
+Description: 'Resume hosting - private S3 bucket delivered by CloudFront (OAC)'
 
 Parameters:
   BucketName:
     Type: String
     Default: caio-dalessi-resume
     Description: S3 bucket name (must be globally unique)
+    AllowedPattern: ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$
+    ConstraintDescription: Must be a valid S3 bucket name (3-63 chars, lowercase letters, numbers, dots, or hyphens).
+
+  PriceClass:
+    Type: String
+    Default: PriceClass_All
+    AllowedValues:
+      - PriceClass_100
+      - PriceClass_200
+      - PriceClass_All
+    Description: >
+      CloudFront price class. PriceClass_100 covers North America and Europe only,
+      so viewers in Brazil are served from the US. PriceClass_All includes South
+      America and stays within free tier at resume traffic.
+
+  Environment:
+    Type: String
+    Default: prod
+    Description: Environment tag applied to the bucket and distribution
+    AllowedPattern: ^[a-zA-Z0-9-]{1,32}$
+    ConstraintDescription: Use 1-32 letters, numbers, or hyphens.
 
 Resources:
 
-  # S3 Bucket - private, no public access
+  # Retained so stack deletion does not fail on a non-empty bucket and does not
+  # destroy the only copy of the resume. Empty and delete the bucket by hand
+  # after the stack is gone if you want it removed.
   ResumeBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Ref BucketName
       PublicAccessBlockConfiguration:
@@ -19,8 +44,33 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireNoncurrentVersions
+            Status: Enabled
+            # Empty prefix selects every object. This resource still uses Prefix;
+            # the S3 API's Filter property is not part of AWS::S3::Bucket.
+            Prefix: ''
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: Project
+          Value: resume-infra
+        - Key: Environment
+          Value: !Ref Environment
 
-  # Bucket policy - allows CloudFront OAC to read objects
+  # CloudFront is the only reader. TLS is required for any other caller.
   ResumeBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
@@ -36,25 +86,39 @@ Resources:
             Condition:
               StringEquals:
                 AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${ResumeDistribution}'
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt ResumeBucket.Arn
+              - !Sub '${ResumeBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
 
-  # CloudFront Origin Access Control
+  # Name includes the stack name. OAC names are unique per account, so a second
+  # stack cannot collide with a hardcoded "resume-oac".
   ResumeOAC:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
       OriginAccessControlConfig:
-        Name: resume-oac
+        Name: !Sub '${AWS::StackName}-oac'
+        Description: !Sub 'OAC for ${AWS::StackName}'
         OriginAccessControlOriginType: s3
         SigningBehavior: always
         SigningProtocol: sigv4
 
-  # CloudFront Distribution
   ResumeDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
       DistributionConfig:
         Enabled: true
-        Comment: Resume PDF distribution
-        DefaultRootObject: 'resume.pdf'
+        Comment: !Sub '${AWS::StackName} resume PDF'
+        DefaultRootObject: resume.pdf
+        IPV6Enabled: true
+        HttpVersion: http2and3
+        PriceClass: !Ref PriceClass
         Origins:
           - Id: S3Origin
             DomainName: !GetAtt ResumeBucket.RegionalDomainName
@@ -64,34 +128,60 @@ Resources:
         DefaultCacheBehavior:
           TargetOriginId: S3Origin
           ViewerProtocolPolicy: redirect-to-https
-          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized managed policy
+          # CachingOptimized: min TTL 1s, default 1 day, max 1 year.
+          # The object Cache-Control (max-age=300) is what viewers and CloudFront honor.
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
           AllowedMethods:
             - GET
             - HEAD
           ResponseHeadersPolicyId: !Ref ResumeResponseHeadersPolicy
-        PriceClass: PriceClass_100  # US, Canada, Europe (cheapest)
-        HttpVersion: http2
+      Tags:
+        - Key: Project
+          Value: resume-infra
+        - Key: Environment
+          Value: !Ref Environment
 
-  # Response headers - forces PDF to open inline in the browser
+  # Content-Type is forced to application/pdf for every response. That is correct
+  # while the distribution serves only the resume. An HTML landing page needs its
+  # own cache behavior; this policy would break HTML, CSS, and images.
   ResumeResponseHeadersPolicy:
     Type: AWS::CloudFront::ResponseHeadersPolicy
     Properties:
       ResponseHeadersPolicyConfig:
-        Name: resume-headers-policy
+        Name: !Sub '${AWS::StackName}-headers'
+        Comment: !Sub 'Response headers for ${AWS::StackName}'
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 63072000
+            IncludeSubdomains: true
+            Override: true
+            Preload: false
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
         CustomHeadersConfig:
           Items:
             - Header: Content-Disposition
-              Value: inline
+              Value: 'inline; filename="Caio-Dalessi-Resume.pdf"'
               Override: true
             - Header: Content-Type
               Value: application/pdf
               Override: true
+            - Header: Cache-Control
+              Value: 'max-age=300, public'
+              Override: true
 
 Outputs:
   CloudFrontURL:
-    Description: 'Your resume is live at this URL'
+    Description: Your resume is live at this URL
     Value: !Sub 'https://${ResumeDistribution.DomainName}'
 
   BucketName:
-    Description: 'S3 bucket name'
+    Description: S3 bucket name
     Value: !Ref ResumeBucket
+
+  DistributionId:
+    Description: CloudFront distribution ID (use this for cache invalidation, not the domain name)
+    Value: !Ref ResumeDistribution
