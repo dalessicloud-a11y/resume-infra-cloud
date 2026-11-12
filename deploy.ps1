@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Deploys resume infrastructure (S3 + CloudFront) and uploads the PDF.
 
@@ -91,12 +91,12 @@ function Write-Info {
 
 function Write-Ok {
     param([string]$Message)
-    Write-Host "✔ $Message" -ForegroundColor Green
+    Write-Host "OK $Message" -ForegroundColor Green
 }
 
 function Stop-Deploy {
     param([string]$Message)
-    Write-Host "✖ $Message" -ForegroundColor Red
+    Write-Host "ERRO $Message" -ForegroundColor Red
     exit 1
 }
 
@@ -150,7 +150,7 @@ if (-not (Test-Path $TemplateFile)) {
 
 $uploadPdf = -not $SkipUpload
 if ($uploadPdf -and -not (Test-Path $ResumeFile)) {
-    Stop-Deploy "PDF não encontrado: $ResumeFile`nUse -ResumeFile <path> ou coloque resume.pdf na raiz do repo."
+    Stop-Deploy "PDF não encontrado: $ResumeFile`nUse -ResumeFile caminho ou coloque resume.pdf na raiz do repo."
 }
 
 if ($ForceUpload) {
